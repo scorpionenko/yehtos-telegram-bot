@@ -6,6 +6,8 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from bot.queue_manager import add_request, get_request
 from bot.queue_manager import get_random_request
 from bot.rating_manager import add_rating, get_average_rating
+from bot.user_service import create_user
+from aiogram import F
 
 router = Router()
 
@@ -13,7 +15,8 @@ menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="😔 Попросити підтримку")],
         [KeyboardButton(text="🤝 Допомогти комусь")],
-        [KeyboardButton(text="👤 Мій профіль")]
+        [KeyboardButton(text="👤 Мій профіль")],
+        [KeyboardButton(text="👨‍⚕️ Стати психологом")]
     ],
     resize_keyboard=True
 )
@@ -37,12 +40,34 @@ rating_keyboard = InlineKeyboardMarkup(
     ]
 )
 
+waiting_for_certificate = set()
 waiting_for_problem = set()
 answering_request = {}
 rating_targets = {}
 
+def admin_keyboard(user_id: int):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Прийняти",
+                    callback_data=f"approve_{user_id}"
+                ),
+                InlineKeyboardButton(
+                    text="❌ Відхилити",
+                    callback_data=f"reject_{user_id}"
+                )
+            ]
+        ]
+    )
+
 @router.message(Command("start"))
 async def start(message: types.Message):
+
+    await create_user(
+        user_id=message.from_user.id,
+        username=message.from_user.username
+    )
 
     await message.answer(
         "👋 Привіт!\n\n"
@@ -52,18 +77,28 @@ async def start(message: types.Message):
     )
 
 
-@router.message()
+from aiogram import F
+
+@router.message(F.text)
 async def handle_message(message: types.Message):
 
     user_id = message.from_user.id
-    text = message.text.strip()
 
+    if not message.text:
+        return
+    
+    text = message.text.strip()
+    
     print("MESSAGE:", text)
 
     # --------------------
     # кнопка підтримки
     # --------------------
-
+     
+    if user_id in waiting_for_certificate:
+        await message.answer("Ти вже відправив заявку ⏳")
+        return 
+      
     if "Попросити підтримку" in text:
 
         waiting_for_problem.add(user_id)
@@ -144,7 +179,15 @@ async def handle_message(message: types.Message):
 
         return
 
-
+    if "Стати психологом" in text:
+    
+        waiting_for_certificate.add(user_id)
+    
+        await message.answer(
+            "Надішліть фото або PDF сертифіката 📄"
+        )
+    
+        return
     # --------------------
     # профіль
     # --------------------
@@ -158,9 +201,11 @@ async def handle_message(message: types.Message):
         )
 
 
-@router.callback_query()
+@router.callback_query(F.data.in_(["next_request", "write_support"]) | F.data.startswith("rate_"))
 async def handle_callbacks(callback: types.CallbackQuery):
 
+    await callback.answer()
+    
     user_id = callback.from_user.id
 
     if callback.data == "next_request":
@@ -207,3 +252,98 @@ async def handle_callbacks(callback: types.CallbackQuery):
             )
 
             del rating_targets[user_id]
+
+
+from aiogram import F
+
+@router.message(F.photo | F.document)
+async def handle_certificate(message: types.Message):
+
+    user_id = message.from_user.id
+
+    if user_id not in waiting_for_certificate:
+        return
+
+    file_id = (
+        message.document.file_id
+        if message.document
+        else message.photo[-1].file_id
+    )
+
+    waiting_for_certificate.remove(user_id)
+
+    await message.answer("Заявку відправлено адміну ✅")
+
+    ADMIN_ID = 846605249
+
+    await message.bot.send_message(
+        ADMIN_ID,
+        f"Нова заявка на психолога від {user_id}"
+    )
+
+    if message.document:
+        await message.bot.send_document(
+            ADMIN_ID,
+            file_id,
+            reply_markup=admin_keyboard(user_id)
+            )
+    else:
+        await message.bot.send_photo(
+            ADMIN_ID,
+            file_id,
+            reply_markup=admin_keyboard(user_id)
+         )
+
+@router.message(Command("approve"))
+async def approve_user(message: types.Message):
+
+    if message.from_user.id != 846605249:
+        return
+
+    try:
+        user_id = int(message.text.split()[1])
+    except:
+        await message.answer("Формат: /approve user_id")
+        return
+
+    from bot.user_service import set_role, set_verified
+
+    await set_role(user_id, "psychologist")
+    await set_verified(user_id, True)
+
+    await message.answer("Користувача підтверджено ✅")
+
+    await message.bot.send_message(
+        user_id,
+        "Вас підтверджено як психолога 👨‍⚕️"
+    )                
+
+@router.callback_query(F.data.startswith("approve_"))
+async def approve_callback(callback: types.CallbackQuery):
+
+    user_id = int(callback.data.split("_")[1])
+
+    from bot.user_service import set_role, set_verified
+
+    await set_role(user_id, "psychologist")
+    await set_verified(user_id, True)
+
+    await callback.message.answer("Користувача підтверджено ✅")
+
+    await callback.bot.send_message(
+        user_id,
+        "Вас підтверджено як психолога 👨‍⚕️"
+    )
+
+
+@router.callback_query(F.data.startswith("reject_"))
+async def reject_callback(callback: types.CallbackQuery):
+
+    user_id = int(callback.data.split("_")[1])
+
+    await callback.message.answer("Заявку відхилено ❌")
+
+    await callback.bot.send_message(
+        user_id,
+        "Вашу заявку відхилено ❌"
+    )        
