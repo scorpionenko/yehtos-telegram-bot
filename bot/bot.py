@@ -1,6 +1,6 @@
 import asyncio
 from aiogram import Bot, Dispatcher
-from config import TOKEN
+from bot.config import TOKEN
 from bot.handlers import router
 from bot.db import connect_db, init_tables
 

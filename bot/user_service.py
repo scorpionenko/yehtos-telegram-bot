@@ -11,3 +11,20 @@ async def create_user(user_id: int, username: str):
 
     async with pool.acquire() as conn:
         await conn.execute(query, user_id, username)
+
+async def set_role(user_id: int, role: str):
+    query = "UPDATE users SET role = $1 WHERE user_id = $2"
+
+    pool = get_pool()
+
+    async with pool.acquire() as conn:
+        await conn.execute(query, role, user_id)
+
+
+async def set_verified(user_id: int, value: bool):
+    query = "UPDATE users SET is_verified = $1 WHERE user_id = $2"
+
+    pool = get_pool()
+
+    async with pool.acquire() as conn:
+        await conn.execute(query, value, user_id)        

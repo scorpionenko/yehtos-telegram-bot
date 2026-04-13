@@ -1,3 +1,5 @@
+from email.mime import message
+
 from aiogram import Router, types
 from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
@@ -8,6 +10,7 @@ from bot.queue_manager import get_random_request
 from bot.rating_manager import add_rating, get_average_rating
 from bot.user_service import create_user
 from aiogram import F
+from bot.user_service import set_role, set_verified
 
 router = Router()
 
@@ -16,7 +19,10 @@ menu = ReplyKeyboardMarkup(
         [KeyboardButton(text="😔 Попросити підтримку")],
         [KeyboardButton(text="🤝 Допомогти комусь")],
         [KeyboardButton(text="👤 Мій профіль")],
-        [KeyboardButton(text="👨‍⚕️ Стати психологом")]
+        [KeyboardButton(text="👨‍⚕️ Стати психологом")],
+        [KeyboardButton(text="🧠 Попросити психолога")],
+        [KeyboardButton(text="👨‍⚕️ Взяти запит психолога")],
+        [KeyboardButton(text="❌ Завершити чат")]
     ],
     resize_keyboard=True
 )
@@ -44,6 +50,12 @@ waiting_for_certificate = set()
 waiting_for_problem = set()
 answering_request = {}
 rating_targets = {}
+active_chats = {}
+waiting_for_reply = set()
+contact_sharing = {}
+psychologist_queue = []
+user_mode = {}
+chat_roles = {}
 
 def admin_keyboard(user_id: int):
     return InlineKeyboardMarkup(
@@ -84,6 +96,30 @@ async def handle_message(message: types.Message):
 
     user_id = message.from_user.id
 
+    if user_id in active_chats and "Завершити чат" not in message.text:
+
+        # ❌ якщо раптом немає ролі — блокуємо
+        if user_id not in chat_roles:
+            return
+    
+        other = active_chats[user_id]
+    
+        # ❌ якщо другий не в чаті — стоп
+        if other not in active_chats:
+            return
+    
+        # 🔥 підпис хто пише
+        role = chat_roles.get(user_id)
+    
+        prefix = "👨‍⚕️ Психолог" if role == "psychologist" else "👤 Користувач"
+    
+        await message.bot.send_message(
+            other,
+            f"{prefix}:\n💬 {message.text}"
+        )
+    
+        return
+
     if not message.text:
         return
     
@@ -109,24 +145,34 @@ async def handle_message(message: types.Message):
         )
 
         return
-
+    
+    if text == "🧠 Попросити психолога":
+    
+        waiting_for_problem.add(user_id)
+        user_mode[user_id] = "psychologist"
+    
+        await message.answer("Опишіть проблему для психолога 🧠")
+        return
     # --------------------
     # користувач пише проблему
     # --------------------
 
     if user_id in waiting_for_problem:
 
-        add_request(user_id, text)
-
+        if user_mode.get(user_id) == "psychologist":
+            psychologist_queue.append({
+                "user_id": user_id,
+                "text": text
+            })
+        else:
+            add_request(user_id, text)
+    
         waiting_for_problem.remove(user_id)
-
-        await message.answer(
-            "Дякую ❤️\n"
-            "Вашу проблему додано у список запитів."
-        )
-
+        user_mode.pop(user_id, None)  # 🔥 ВАЖЛИВО
+    
+        await message.answer("Дякую ❤️")
+    
         return
-
 
     # --------------------
     # нова логіка допомоги
@@ -151,7 +197,45 @@ async def handle_message(message: types.Message):
 
         return
 
+    if "Завершити чат" in text:
 
+        if user_id in active_chats:
+
+            other = active_chats[user_id]
+
+            await message.answer("Чат завершено ❌")
+            await message.bot.send_message(other, "Чат завершено ❌")
+
+            del active_chats[user_id]
+            del active_chats[other]
+
+        return
+
+    if "Взяти запит психолога" in text:
+
+        if not psychologist_queue:
+            await message.answer("Немає запитів 🧠")
+            return
+    
+        data = psychologist_queue.pop(0)
+    
+        other_user = data["user_id"]
+        problem = data["text"]
+    
+        # 🔥 створюємо чат
+        active_chats[user_id] = other_user
+        active_chats[other_user] = user_id
+        chat_roles[user_id] = "psychologist"
+        chat_roles[other_user] = "user"
+    
+        await message.answer(f"🧠 Запит:\n\n{problem}")
+    
+        await message.bot.send_message(
+            other_user,
+            "👨‍⚕️ Психолог підключився до чату"
+        )
+    
+        return
     # --------------------
     # написання підтримки
     # --------------------
@@ -346,4 +430,4 @@ async def reject_callback(callback: types.CallbackQuery):
     await callback.bot.send_message(
         user_id,
         "Вашу заявку відхилено ❌"
-    )        
+    )         
