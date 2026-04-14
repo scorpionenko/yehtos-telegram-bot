@@ -11,17 +11,46 @@ from bot.rating_manager import add_rating, get_average_rating
 from bot.user_service import create_user
 from aiogram import F
 from bot.user_service import set_role, set_verified
+from bot.user_service import get_user
 
 router = Router()
 
-menu = ReplyKeyboardMarkup(
+admin_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="😔 Попросити підтримку")],
         [KeyboardButton(text="🤝 Допомогти комусь")],
-        [KeyboardButton(text="👤 Мій профіль")],
-        [KeyboardButton(text="👨‍⚕️ Стати психологом")],
         [KeyboardButton(text="🧠 Попросити психолога")],
+        [KeyboardButton(text="👨‍⚕️ Стати психологом")],
         [KeyboardButton(text="👨‍⚕️ Взяти запит психолога")],
+        [KeyboardButton(text="👤 Мій профіль")],
+    ],
+    resize_keyboard=True
+)
+
+# USER
+user_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="😔 Попросити підтримку")],
+        [KeyboardButton(text="🧠 Попросити психолога")],
+        [KeyboardButton(text="🤝 Допомогти комусь")],
+        [KeyboardButton(text="👤 Мій профіль")],
+        [KeyboardButton(text="👨‍⚕️ Стати психологом")]
+    ],
+    resize_keyboard=True
+)
+
+# PSYCHOLOGIST
+psychologist_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="👨‍⚕️ Взяти запит психолога")],
+        [KeyboardButton(text="👤 Мій профіль")]
+    ],
+    resize_keyboard=True
+)
+
+# CHAT MENU (для обох)
+chat_menu = ReplyKeyboardMarkup(
+    keyboard=[
         [KeyboardButton(text="❌ Завершити чат")]
     ],
     resize_keyboard=True
@@ -57,6 +86,23 @@ psychologist_queue = []
 user_mode = {}
 chat_roles = {}
 
+async def get_menu(user_id):
+
+    ADMIN_ID = 846605249  # 🔥 твій айді
+
+    if user_id == ADMIN_ID:
+        return admin_menu
+
+    if user_id in active_chats:
+        return chat_menu    
+
+    user = await get_user(user_id)
+
+    if user and user["role"] == "psychologist":
+        return psychologist_menu
+
+    return user_menu
+
 def admin_keyboard(user_id: int):
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -81,6 +127,8 @@ async def start(message: types.Message):
         username=message.from_user.username
     )
 
+    menu = await get_menu(message.from_user.id)
+    
     await message.answer(
         "👋 Привіт!\n\n"
         "Я бот «ЄХтось».\n\n"
@@ -95,8 +143,43 @@ from aiogram import F
 async def handle_message(message: types.Message):
 
     user_id = message.from_user.id
+    text = message.text.strip()
 
-    if user_id in active_chats and "Завершити чат" not in message.text:
+    if text == "❌ Завершити чат":
+
+        if user_id in active_chats:
+    
+            other = active_chats[user_id]
+    
+            # ❗ запамʼятали ролі ДО видалення
+            role_user = chat_roles.get(user_id)
+            role_other = chat_roles.get(other)
+    
+            # ❗ видалили чат
+            del active_chats[user_id]
+            del active_chats[other]
+    
+            chat_roles.pop(user_id, None)
+            chat_roles.pop(other, None)
+    
+            # ❗ тепер меню
+            menu = await get_menu(user_id)
+            menu_other = await get_menu(other)
+    
+            await message.answer(
+                "Чат завершено ❌",
+                reply_markup=menu
+            )
+    
+            await message.bot.send_message(
+                other,
+                "Чат завершено ❌",
+                reply_markup=menu_other
+            )
+    
+        return
+
+    if user_id in active_chats and text != "❌ Завершити чат":
 
         # ❌ якщо раптом немає ролі — блокуємо
         if user_id not in chat_roles:
@@ -197,19 +280,7 @@ async def handle_message(message: types.Message):
 
         return
 
-    if "Завершити чат" in text:
-
-        if user_id in active_chats:
-
-            other = active_chats[user_id]
-
-            await message.answer("Чат завершено ❌")
-            await message.bot.send_message(other, "Чат завершено ❌")
-
-            del active_chats[user_id]
-            del active_chats[other]
-
-        return
+    
 
     if "Взяти запит психолога" in text:
 
@@ -228,11 +299,19 @@ async def handle_message(message: types.Message):
         chat_roles[user_id] = "psychologist"
         chat_roles[other_user] = "user"
     
-        await message.answer(f"🧠 Запит:\n\n{problem}")
+        menu = await get_menu(user_id)
+
+        await message.answer(
+            f"🧠 Запит:\n\n{problem}",
+            reply_markup=menu
+        )
     
+        menu_other = await get_menu(other_user)
+
         await message.bot.send_message(
             other_user,
-            "👨‍⚕️ Психолог підключився до чату"
+            "👨‍⚕️ Психолог підключився до чату",
+            reply_markup=menu_other
         )
     
         return
@@ -414,9 +493,12 @@ async def approve_callback(callback: types.CallbackQuery):
 
     await callback.message.answer("Користувача підтверджено ✅")
 
+    menu = await get_menu(user_id)
+
     await callback.bot.send_message(
         user_id,
-        "Вас підтверджено як психолога 👨‍⚕️"
+        "Вас підтверджено як психолога 👨‍⚕️",
+        reply_markup=menu
     )
 
 
@@ -431,3 +513,29 @@ async def reject_callback(callback: types.CallbackQuery):
         user_id,
         "Вашу заявку відхилено ❌"
     )         
+
+@router.message(Command("demote"))
+async def demote_user(message: types.Message):
+
+    ADMIN_ID = 846605249
+
+    if message.from_user.id != ADMIN_ID:
+        return
+
+    try:
+        user_id = int(message.text.split()[1])
+    except:
+        await message.answer("Формат: /demote user_id")
+        return
+
+    from bot.user_service import set_role, set_verified
+
+    await set_role(user_id, "user")
+    await set_verified(user_id, False)
+
+    await message.answer("Користувача знижено до user ❌")
+
+    await message.bot.send_message(
+        user_id,
+        "Вас знято з ролі психолога ❌"
+    )    

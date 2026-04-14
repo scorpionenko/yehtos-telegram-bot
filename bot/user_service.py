@@ -27,4 +27,14 @@ async def set_verified(user_id: int, value: bool):
     pool = get_pool()
 
     async with pool.acquire() as conn:
-        await conn.execute(query, value, user_id)        
+        await conn.execute(query, value, user_id) 
+
+from bot.db import get_pool
+
+async def get_user(user_id: int):
+    query = "SELECT * FROM users WHERE user_id = $1"
+
+    pool = get_pool()
+
+    async with pool.acquire() as conn:
+        return await conn.fetchrow(query, user_id)               
